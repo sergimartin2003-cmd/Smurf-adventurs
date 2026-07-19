@@ -2,7 +2,10 @@
 
 Programa sencillo para llevar el **registro de inventario** de tu pequeña empresa y ver **qué productos rentan y cuáles no a largo plazo**.
 
-Todo funciona dentro de un solo archivo (`index.html`). No necesita internet, ni instalar nada, ni crear cuentas. Los datos se guardan **en tu propio dispositivo**.
+Todo funciona dentro de un solo archivo (`index.html`). Funciona **sin instalar nada**. Puedes usarlo de dos formas:
+
+- **Modo local** (por defecto): los datos se guardan en tu propio dispositivo. Cero configuración.
+- **Modo nube (sincronizado)**: los mismos datos en vivo en el móvil, el ordenador, etc. Requiere una configuración inicial gratuita de ~10 min (ver más abajo).
 
 ---
 
@@ -35,6 +38,24 @@ El historial de cada **venta**, **reposición/compra** y **ajuste** de stock. El
 
 ### 💹 Rentabilidad
 El análisis clave: separa tus productos en **los que más rentan**, **los que no rentan** (los vendes por debajo del coste o dan pérdidas) y **los que aún no has vendido**. Así sabes en qué apostar y qué precio revisar.
+
+---
+
+## ☁️ Verlo desde varios sitios (sincronización en la nube)
+
+Si quieres que **los mismos datos aparezcan en todos tus dispositivos** (añades algo en el móvil y lo ves en el ordenador, y al revés), activa el modo nube. Es gratis, usa **Supabase** y se configura una sola vez.
+
+Pulsa el botón **☁️** (arriba a la derecha) y sigue la guía que aparece dentro del programa. En resumen:
+
+1. Crea una cuenta gratis en **supabase.com** y un **New project** (guarda la contraseña de la base de datos).
+2. En **SQL Editor**, pega el código que te muestra el programa (botón «Copiar código») y pulsa **Run**. Crea la tabla donde se guardan tus datos, protegida para que solo tú puedas verlos.
+3. En **Project Settings → API**, copia el **Project URL** y la clave **anon public**, y pégalos en el programa.
+4. Recomendado: en **Authentication → Sign In / Providers → Email**, desactiva **Confirm email** (así entras sin tener que confirmar el correo).
+5. Crea tu cuenta con email y contraseña dentro del programa. ¡Listo!
+
+A partir de ahí, cada cambio se guarda en la nube automáticamente. Para usarlo en otro dispositivo, abre la misma web, conecta el mismo proyecto y entra con tu email. El botón **☁️** muestra el estado: *Local*, *Sincronizado ✓*, *Guardando…* o *Sin conexión*. Si te quedas sin internet, se guarda en local y se sube cuando vuelves a tener conexión.
+
+> 🔒 **Privacidad:** tus datos solo son visibles para tu cuenta (con contraseña). El código SQL activa la seguridad por filas (RLS) de Supabase para que nadie más pueda leerlos.
 
 ---
 

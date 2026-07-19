@@ -115,6 +115,23 @@
   .lead{font-size:13px;color:var(--muted)}
   .strong-num{font-weight:800;font-size:20px}
   ul.clean{margin:8px 0 0;padding-left:18px} ul.clean li{margin:4px 0}
+  /* Nube / sync */
+  #cloudBtn.state-synced{background:rgba(120,231,170,.25);border-color:rgba(120,231,170,.6)}
+  #cloudBtn.state-saving{background:rgba(255,255,255,.28)}
+  #cloudBtn.state-offline{background:rgba(255,196,120,.28);border-color:rgba(255,196,120,.6)}
+  .cloud-status{display:flex;align-items:center;gap:8px;padding:11px 13px;border-radius:10px;background:var(--brand-soft);font-size:13.5px;margin-bottom:14px}
+  .cloud-status.ok{background:var(--ok-soft)} .cloud-status.off{background:var(--warn-soft)}
+  .guide{border:1px solid var(--line);border-radius:10px;margin-top:8px}
+  .guide>summary{cursor:pointer;padding:11px 13px;font-weight:600;font-size:13.5px;list-style:none}
+  .guide>summary::-webkit-details-marker{display:none}
+  .guide>summary::before{content:"▸ ";color:var(--brand)}
+  .guide[open]>summary::before{content:"▾ "}
+  .guide .gbody{padding:0 14px 14px;font-size:13px;color:#3a4457}
+  .guide ol{padding-left:18px;margin:8px 0} .guide li{margin:6px 0}
+  .guide code,.codebox{font-family:ui-monospace,Menlo,Consolas,monospace}
+  .codebox{display:block;white-space:pre;overflow:auto;background:#1f2733;color:#e6e9f0;padding:12px;border-radius:8px;font-size:12px;margin:8px 0}
+  .err{color:var(--bad);font-size:13px;margin:8px 0 0}
+  .okmsg{color:var(--ok);font-size:13px;margin:8px 0 0}
   @media(max-width:620px){ .frow{grid-template-columns:1fr} .kpi .val{font-size:22px} }
 </style>
 
@@ -133,6 +150,7 @@
         <option value="COP">COP Peso col.</option>
         <option value="ARS">ARS Peso arg.</option>
       </select>
+      <button class="btn light sm" data-action="cloud" id="cloudBtn" title="Sincronización en la nube">☁️ <span id="cloudBadge">Local</span></button>
       <button class="btn light sm" data-action="export-json" title="Guardar copia de seguridad">⬇️ Copia</button>
       <button class="btn light sm" data-action="import-json" title="Restaurar copia">⬆️ Restaurar</button>
     </div>
@@ -166,14 +184,223 @@ let VIEW = "panel";
 let sortKey = "name", sortDir = 1;
 let q = "", catFilter = "", movFilter = "";
 
+function migrateProducts(){
+  // Datos antiguos con "extra" pasan a "envío a almacén"
+  (S.products||[]).forEach(p=>{ if(p.shipIn==null && p.shipOut==null && p.extra!=null){ p.shipIn=num(p.extra); p.shipOut=0; delete p.extra; } });
+}
 function load(){
   try{ const raw = localStorage.getItem(STORE_KEY); if(raw){ S = Object.assign(S, JSON.parse(raw)); } }
   catch(e){ console.warn("No se pudo cargar", e); }
-  // Migración: datos antiguos con "extra" pasan a "envío a almacén"
-  (S.products||[]).forEach(p=>{ if(p.shipIn==null && p.shipOut==null && p.extra!=null){ p.shipIn=num(p.extra); p.shipOut=0; delete p.extra; } });
+  migrateProducts();
 }
-function save(){ localStorage.setItem(STORE_KEY, JSON.stringify(S)); }
+function saveLocal(){ localStorage.setItem(STORE_KEY, JSON.stringify(S)); }
+function save(){ saveLocal(); scheduleCloudPush(); }
 function uid(){ return Date.now().toString(36)+Math.random().toString(36).slice(2,7); }
+
+/* ================== SINCRONIZACIÓN EN LA NUBE (Supabase) ==================
+   Guarda todo tu inventario en la nube para verlo desde cualquier dispositivo.
+   Es opcional: si no lo configuras, el programa funciona igual, guardando en local. */
+const CLOUD_CFG_KEY = "inv_cloud_cfg";   // {url, anon}
+const CLOUD_SES_KEY = "inv_cloud_ses";   // {access_token, refresh_token, user:{id,email}}
+const Cloud = {
+  cfg:null, ses:null, lastSync:null, state:"local", timer:null,
+  init(){ try{ this.cfg=JSON.parse(localStorage.getItem(CLOUD_CFG_KEY)||"null"); }catch(e){}
+          try{ this.ses=JSON.parse(localStorage.getItem(CLOUD_SES_KEY)||"null"); }catch(e){} },
+  saveCfg(url,anon){ this.cfg={url:String(url||"").trim().replace(/\/+$/,""),anon:String(anon||"").trim()};
+    localStorage.setItem(CLOUD_CFG_KEY,JSON.stringify(this.cfg)); },
+  clearCfg(){ this.cfg=null; localStorage.removeItem(CLOUD_CFG_KEY); this.clearSes(); },
+  saveSes(s){ this.ses=s; localStorage.setItem(CLOUD_SES_KEY,JSON.stringify(s)); },
+  clearSes(){ this.ses=null; localStorage.removeItem(CLOUD_SES_KEY); },
+  isOn(){ return !!(this.cfg && this.cfg.url && this.cfg.anon && this.ses && this.ses.access_token); },
+  headers(auth){ const h={ "apikey":this.cfg.anon, "Content-Type":"application/json" };
+    if(auth && this.ses) h["Authorization"]="Bearer "+this.ses.access_token; return h; },
+  async signIn(email,password){
+    const r=await fetch(this.cfg.url+"/auth/v1/token?grant_type=password",
+      {method:"POST",headers:this.headers(false),body:JSON.stringify({email,password})});
+    const j=await r.json().catch(()=>({}));
+    if(!r.ok) throw new Error(j.error_description||j.msg||j.message||j.error||"No se pudo iniciar sesión");
+    this.saveSes({access_token:j.access_token,refresh_token:j.refresh_token,user:{id:j.user.id,email:j.user.email}});
+  },
+  async signUp(email,password){
+    const r=await fetch(this.cfg.url+"/auth/v1/signup",
+      {method:"POST",headers:this.headers(false),body:JSON.stringify({email,password})});
+    const j=await r.json().catch(()=>({}));
+    if(!r.ok) throw new Error(j.error_description||j.msg||j.message||j.error||"No se pudo crear la cuenta");
+    if(j.access_token){ this.saveSes({access_token:j.access_token,refresh_token:j.refresh_token,user:{id:j.user.id,email:j.user.email}}); return true; }
+    return false; // requiere confirmar email
+  },
+  async refresh(){
+    if(!this.ses||!this.ses.refresh_token) throw new Error("sin sesión");
+    const r=await fetch(this.cfg.url+"/auth/v1/token?grant_type=refresh_token",
+      {method:"POST",headers:this.headers(false),body:JSON.stringify({refresh_token:this.ses.refresh_token})});
+    const j=await r.json().catch(()=>({}));
+    if(!r.ok){ this.clearSes(); throw new Error("La sesión ha caducado, vuelve a entrar"); }
+    this.saveSes({access_token:j.access_token,refresh_token:j.refresh_token,user:{id:j.user.id,email:j.user.email}});
+  },
+  async _fetch(path,opts,retry){
+    let r=await fetch(this.cfg.url+path,opts);
+    if(r.status===401 && !retry){ await this.refresh(); opts.headers=Object.assign(opts.headers,{Authorization:"Bearer "+this.ses.access_token}); return this._fetch(path,opts,true); }
+    return r;
+  },
+  async pull(){
+    const r=await this._fetch("/rest/v1/inventory_state?select=data,updated_at",{headers:this.headers(true)});
+    if(!r.ok) throw new Error("No se pudo leer de la nube ("+r.status+")");
+    const rows=await r.json(); return rows[0]||null;
+  },
+  async push(data){
+    const body=[{ user_id:this.ses.user.id, data, updated_at:new Date().toISOString() }];
+    const r=await this._fetch("/rest/v1/inventory_state?on_conflict=user_id",
+      {method:"POST",headers:Object.assign(this.headers(true),{Prefer:"resolution=merge-duplicates,return=minimal"}),body:JSON.stringify(body)});
+    if(!r.ok){ const t=await r.text().catch(()=>""); throw new Error("No se pudo guardar en la nube ("+r.status+") "+t); }
+  }
+};
+
+function setCloudState(st){ Cloud.state=st; updateCloudBadge(); }
+function updateCloudBadge(){
+  const btn=document.getElementById("cloudBtn"), badge=document.getElementById("cloudBadge");
+  if(!btn||!badge) return;
+  btn.classList.remove("state-synced","state-saving","state-offline");
+  const map={local:["Local",""],saving:["Guardando…","state-saving"],synced:["Sincronizado ✓","state-synced"],offline:["Sin conexión","state-offline"]};
+  const [txt,cls]=map[Cloud.state]||map.local; badge.textContent=txt; if(cls) btn.classList.add(cls);
+}
+function scheduleCloudPush(){
+  if(!Cloud.isOn()) return;
+  setCloudState("saving"); clearTimeout(Cloud.timer);
+  Cloud.timer=setTimeout(cloudPush, 700);
+}
+async function cloudPush(){
+  if(!Cloud.isOn()) return;
+  try{ await Cloud.push({currency:S.currency,products:S.products,movements:S.movements});
+    Cloud.lastSync=new Date(); setCloudState("synced"); }
+  catch(e){ console.warn(e); setCloudState("offline"); }
+}
+async function cloudInitialSync(){
+  // Al entrar: si la nube tiene datos, se cargan; si está vacía, se sube lo local (primera vez)
+  try{
+    const row=await Cloud.pull();
+    if(row && row.data && ((row.data.products&&row.data.products.length)||(row.data.movements&&row.data.movements.length))){
+      S=Object.assign({currency:"EUR",products:[],movements:[]},row.data); migrateProducts(); saveLocal();
+      const cs=document.getElementById("curSel"); if(cs) cs.value=S.currency;
+      render();
+    } else {
+      await Cloud.push({currency:S.currency,products:S.products,movements:S.movements});
+    }
+    Cloud.lastSync=new Date(); setCloudState("synced");
+  }catch(e){ console.warn(e); setCloudState("offline"); }
+}
+async function cloudPullNow(){
+  if(!Cloud.isOn()) return;
+  setCloudState("saving");
+  try{
+    const row=await Cloud.pull();
+    if(row && row.data){ S=Object.assign({currency:"EUR",products:[],movements:[]},row.data); migrateProducts(); saveLocal();
+      const cs=document.getElementById("curSel"); if(cs) cs.value=S.currency; render(); }
+    Cloud.lastSync=new Date(); setCloudState("synced"); toast("Datos actualizados desde la nube");
+  }catch(e){ console.warn(e); setCloudState("offline"); toast("No se pudo sincronizar (sin conexión)"); }
+  openCloudModal();
+}
+
+const SETUP_SQL = `create table if not exists inventory_state (
+  user_id uuid primary key references auth.users on delete cascade,
+  data jsonb not null default '{}'::jsonb,
+  updated_at timestamptz not null default now()
+);
+alter table inventory_state enable row level security;
+create policy "propio_leer"      on inventory_state for select using (auth.uid() = user_id);
+create policy "propio_insertar"  on inventory_state for insert with check (auth.uid() = user_id);
+create policy "propio_actualizar" on inventory_state for update using (auth.uid() = user_id) with check (auth.uid() = user_id);`;
+
+function cloudGuideHTML(){
+  return `<details class="guide"><summary>¿Cómo consigo esto? Guía rápida (una sola vez, ~10 min)</summary>
+    <div class="gbody">
+      <ol>
+        <li>Entra en <b>supabase.com</b>, crea una cuenta gratis y pulsa <b>New project</b>. Ponle un nombre y una contraseña de base de datos (guárdala). Espera 1-2 min a que se cree.</li>
+        <li>En el menú izquierdo abre <b>SQL Editor</b>, pega este código y pulsa <b>Run</b> (crea la tabla donde se guardan tus datos):
+          <textarea id="sqlBox" readonly class="codebox" style="width:100%;height:120px;border:0">${esc(SETUP_SQL)}</textarea>
+          <button type="button" class="btn sm" data-cloud="copy-sql">📋 Copiar código</button>
+        </li>
+        <li>Ve a <b>Project Settings → API</b> y copia dos datos:
+          <ul class="clean"><li><b>Project URL</b> → va en «URL del proyecto».</li>
+          <li><b>anon public</b> (Project API keys) → va en «Clave anónima».</li></ul>
+        </li>
+        <li>Recomendado: en <b>Authentication → Sign In / Providers → Email</b>, desactiva <b>Confirm email</b> para poder entrar sin confirmar el correo.</li>
+        <li>Pega los dos datos aquí abajo, guarda, y crea tu cuenta con email y contraseña. A partir de ahí, todo se sincroniza solo.</li>
+      </ol>
+    </div></details>`;
+}
+
+function openCloudModal(){
+  let body, foot;
+  if(!Cloud.cfg || !Cloud.cfg.url || !Cloud.cfg.anon){
+    // Paso 1: conectar el proyecto
+    body = `<p class="panel-sub" style="margin-top:0">Sincroniza tu inventario para verlo y editarlo desde el móvil, el ordenador y donde quieras. Usa <b>Supabase</b> (gratis). Configúralo una vez:</p>
+      ${cloudGuideHTML()}
+      <div class="frow one" style="margin-top:14px"><div class="field"><label>URL del proyecto</label>
+        <input type="text" id="cfgUrl" placeholder="https://xxxxxxxx.supabase.co"></div></div>
+      <div class="frow one"><div class="field"><label>Clave anónima (anon public)</label>
+        <input type="text" id="cfgAnon" placeholder="eyJhbGciOi..."></div></div>
+      <div id="cloudMsg"></div>`;
+    foot = `<button type="button" class="btn ghost" data-action="close-modal">Cerrar</button>
+      <button type="button" class="btn primary" data-cloud="save-cfg">Guardar conexión</button>`;
+  } else if(!Cloud.isOn()){
+    // Paso 2: iniciar sesión / crear cuenta
+    body = `<div class="cloud-status">🔌 Proyecto conectado: <b>${esc(Cloud.cfg.url.replace(/^https?:\/\//,""))}</b></div>
+      <p class="panel-sub" style="margin-top:0">Entra con tu email y contraseña. Si es la primera vez, pulsa «Crear cuenta».</p>
+      <div class="frow one"><div class="field"><label>Email</label><input type="email" id="authEmail" placeholder="tucorreo@ejemplo.com"></div></div>
+      <div class="frow one"><div class="field"><label>Contraseña</label><input type="password" id="authPass" placeholder="mínimo 6 caracteres"></div></div>
+      <div id="cloudMsg"></div>
+      <p class="hintline" style="margin-top:10px"><a href="#" data-cloud="change-project">Cambiar de proyecto</a></p>`;
+    foot = `<button type="button" class="btn ghost" data-action="close-modal">Cerrar</button>
+      <button type="button" class="btn" data-cloud="signup">Crear cuenta</button>
+      <button type="button" class="btn primary" data-cloud="signin">Entrar</button>`;
+  } else {
+    // Paso 3: conectado
+    const last=Cloud.lastSync?Cloud.lastSync.toLocaleString("es-ES"):"—";
+    const stCls=Cloud.state==="offline"?"off":"ok";
+    body = `<div class="cloud-status ${stCls}">✅ Conectado como <b>${esc(Cloud.ses.user.email)}</b></div>
+      <p class="panel-sub" style="margin-top:0">Tus cambios se guardan en la nube automáticamente y aparecen en todos tus dispositivos. Abre esta misma web en el móvil o en otro ordenador y entra con este email para ver los mismos datos.</p>
+      <p class="lead">Estado: <b>${Cloud.state==="offline"?"sin conexión (se guardó en local)":"sincronizado"}</b></p>
+      <p class="lead">Última sincronización: ${last}</p>
+      <p class="hintline" style="margin-top:10px"><a href="#" data-cloud="change-project">Cambiar de proyecto</a></p>
+      <div id="cloudMsg"></div>`;
+    foot = `<button type="button" class="btn ghost" data-cloud="signout">Cerrar sesión</button>
+      <button type="button" class="btn" data-action="close-modal">Cerrar</button>
+      <button type="button" class="btn primary" data-cloud="sync-now">🔄 Sincronizar ahora</button>`;
+  }
+  modalEl.innerHTML = `<h3>☁️ Sincronización en la nube</h3>
+    <div style="padding:18px 20px">${body}</div>
+    <div class="foot">${foot}</div>`;
+  modalBg.classList.add("show");
+  onSubmit=null;
+  const first=modalEl.querySelector("input"); if(first) setTimeout(()=>first.focus(),40);
+}
+
+function cloudMsg(html,cls){ const el=document.getElementById("cloudMsg"); if(el) el.innerHTML=`<p class="${cls||'err'}">${html}</p>`; }
+
+async function handleCloudAction(act){
+  if(act==="copy-sql"){ const t=document.getElementById("sqlBox"); if(t){ t.select(); try{document.execCommand("copy");}catch(e){} toast("Código copiado"); } return; }
+  if(act==="change-project"){ if(confirm("¿Cambiar de proyecto? Se cerrará la sesión actual.")){ Cloud.clearCfg(); setCloudState("local"); openCloudModal(); } return; }
+  if(act==="save-cfg"){
+    const url=document.getElementById("cfgUrl").value.trim(), anon=document.getElementById("cfgAnon").value.trim();
+    if(!/^https?:\/\/.+/.test(url)){ cloudMsg("La URL del proyecto no parece válida (debe empezar por https://)."); return; }
+    if(anon.length<20){ cloudMsg("La clave anónima parece incompleta."); return; }
+    Cloud.saveCfg(url,anon); openCloudModal(); return;
+  }
+  if(act==="signin"||act==="signup"){
+    const email=document.getElementById("authEmail").value.trim(), pass=document.getElementById("authPass").value;
+    if(!email||!pass){ cloudMsg("Escribe tu email y contraseña."); return; }
+    cloudMsg("Conectando…","okmsg");
+    try{
+      if(act==="signup"){ const ok=await Cloud.signUp(email,pass);
+        if(!ok){ cloudMsg("Cuenta creada. Revisa tu correo y confirma el email, o desactiva «Confirm email» en Supabase; luego pulsa «Entrar».","okmsg"); return; } }
+      else { await Cloud.signIn(email,pass); }
+      await cloudInitialSync(); openCloudModal(); toast("Conectado a la nube");
+    }catch(e){ cloudMsg(esc(e.message||"No se pudo conectar")); setCloudState("local"); }
+    return;
+  }
+  if(act==="sync-now"){ await cloudPullNow(); return; }
+  if(act==="signout"){ if(confirm("¿Cerrar sesión en este dispositivo? Tus datos siguen guardados en la nube y en local.")){ Cloud.clearSes(); setCloudState("local"); openCloudModal(); } return; }
+}
 
 /* ================== UTILIDADES ================== */
 function num(v){ if(typeof v==="number") return v; if(v==null||v==="") return 0;
@@ -664,9 +891,12 @@ document.addEventListener("click",e=>{
     "import-json":()=>importJSON(),
     "export-csv":()=>exportCSV(),
     "load-demo":()=>loadDemo(),
+    "cloud":()=>openCloudModal(),
   };
   if(map[a]){ e.preventDefault(); map[a](); }
 });
+document.addEventListener("click",e=>{ const el=e.target.closest("[data-cloud]"); if(!el) return;
+  e.preventDefault(); handleCloudAction(el.dataset.cloud); });
 modalBg.addEventListener("click",e=>{ if(e.target===modalBg) closeModal(); });
 document.addEventListener("keydown",e=>{ if(e.key==="Escape") closeModal(); });
 
@@ -677,6 +907,9 @@ function toast(msg){ toastEl.textContent=msg; toastEl.classList.add("show");
 
 /* ================== INICIO ================== */
 load();
+Cloud.init();
 document.getElementById("curSel").value=S.currency;
 render();
+updateCloudBadge();
+if(Cloud.isOn()){ setCloudState("saving"); cloudInitialSync(); }
 </script>
