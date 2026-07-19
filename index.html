@@ -169,6 +169,8 @@ let q = "", catFilter = "", movFilter = "";
 function load(){
   try{ const raw = localStorage.getItem(STORE_KEY); if(raw){ S = Object.assign(S, JSON.parse(raw)); } }
   catch(e){ console.warn("No se pudo cargar", e); }
+  // Migración: datos antiguos con "extra" pasan a "envío a almacén"
+  (S.products||[]).forEach(p=>{ if(p.shipIn==null && p.shipOut==null && p.extra!=null){ p.shipIn=num(p.extra); p.shipOut=0; delete p.extra; } });
 }
 function save(){ localStorage.setItem(STORE_KEY, JSON.stringify(S)); }
 function uid(){ return Date.now().toString(36)+Math.random().toString(36).slice(2,7); }
@@ -186,7 +188,7 @@ function monthKey(iso){ return (iso||"").slice(0,7); }
 function monthLabel(k){ const [y,m]=k.split("-"); const n=["ene","feb","mar","abr","may","jun","jul","ago","sep","oct","nov","dic"]; return n[+m-1]+" "+y.slice(2); }
 
 /* ================== CÁLCULOS DE RENTABILIDAD ================== */
-function effCost(p){ return num(p.cost)+num(p.extra); }           // coste real por unidad (compra + gastos)
+function effCost(p){ return num(p.cost)+num(p.shipIn)+num(p.shipOut)+num(p.extra); } // coste real = producto + envío a almacén + envío final (extra = compatibilidad datos antiguos)
 function unitMargin(p){ return num(p.price)-effCost(p); }          // margen por unidad
 function unitMarginPct(p){ return num(p.price)>0 ? unitMargin(p)/num(p.price) : 0; }
 
@@ -401,7 +403,7 @@ function productRow(p){
   return `<tr>
     <td><b>${esc(p.name)}</b>${p.sku?`<div class="lead" style="font-size:12px">${esc(p.sku)}</div>`:""}</td>
     <td>${p.category?`<span class="pill mut">${esc(p.category)}</span>`:"—"}</td>
-    <td class="num">${money(effCost(p))}</td>
+    <td class="num" title="Producto ${money(num(p.cost))} + Almacén ${money(num(p.shipIn))} + Envío final ${money(num(p.shipOut))}">${money(effCost(p))}</td>
     <td class="num">${money(num(p.price))}</td>
     <td class="num ${um<0?'bad':'ok'}">${money(um)}<div class="lead" style="font-size:11px">${pct(unitMarginPct(p))}</div></td>
     <td class="num">${num(p.stock)}${num(p.minStock)>0&&num(p.stock)<=num(p.minStock)?' 🟠':''}</td>
@@ -515,29 +517,30 @@ function productForm(p){
       <div class="field"><label>Código / SKU</label><input type="text" name="sku" value="${esc(p.sku||"")}" placeholder="Opcional"></div>
     </div>
     <div class="frow">
-      <div class="field"><label>Coste de compra (por unidad) *</label><input type="text" name="cost" value="${p.cost!=null?p.cost:""}" required inputmode="decimal" placeholder="0,00"></div>
-      <div class="field"><label>Gastos extra por unidad</label><input type="text" name="extra" value="${p.extra!=null?p.extra:""}" inputmode="decimal" placeholder="envío, embalaje…"></div>
+      <div class="field"><label>Coste del producto (por unidad) *</label><input type="text" name="cost" value="${p.cost!=null?p.cost:""}" required inputmode="decimal" placeholder="0,00"></div>
+      <div class="field"><label>Envío a almacén (por unidad)</label><input type="text" name="shipIn" value="${p.shipIn!=null?p.shipIn:""}" inputmode="decimal" placeholder="0,00"></div>
     </div>
     <div class="frow">
+      <div class="field"><label>Envío final / al cliente (por unidad)</label><input type="text" name="shipOut" value="${p.shipOut!=null?p.shipOut:""}" inputmode="decimal" placeholder="0,00"></div>
       <div class="field"><label>Precio de venta (por unidad) *</label><input type="text" name="price" value="${p.price!=null?p.price:""}" required inputmode="decimal" placeholder="0,00"></div>
-      <div class="field"><label>Stock actual</label><input type="text" name="stock" value="${p.stock!=null?p.stock:""}" inputmode="numeric" placeholder="0"></div>
     </div>
     <div class="frow">
+      <div class="field"><label>Stock actual</label><input type="text" name="stock" value="${p.stock!=null?p.stock:""}" inputmode="numeric" placeholder="0"></div>
       <div class="field"><label>Aviso de stock mínimo</label><input type="text" name="minStock" value="${p.minStock!=null?p.minStock:""}" inputmode="numeric" placeholder="Ej. 5"></div>
-      <div class="field"><label>Notas</label><input type="text" name="notes" value="${esc(p.notes||"")}" placeholder="Opcional"></div>
     </div>
-    <p class="hintline">El coste real por unidad será coste de compra + gastos extra. Puedes usar coma o punto para los decimales.</p>
+    <div class="frow one"><div class="field"><label>Notas</label><input type="text" name="notes" value="${esc(p.notes||"")}" placeholder="Opcional"></div></div>
+    <p class="hintline">El <b>coste real por unidad</b> = coste del producto + envío a almacén + envío final. El <b>beneficio por unidad</b> = precio de venta − coste real. Puedes usar coma o punto para los decimales.</p>
   `, data=>{
     if(!data.name.trim()){ toast("Pon un nombre al producto"); return; }
     if(p.id){ const idx=S.products.findIndex(x=>x.id===p.id);
       S.products[idx]=Object.assign(S.products[idx],{
         name:data.name.trim(), category:data.category.trim(), sku:data.sku.trim(),
-        cost:num(data.cost), extra:num(data.extra), price:num(data.price),
+        cost:num(data.cost), shipIn:num(data.shipIn), shipOut:num(data.shipOut), extra:0, price:num(data.price),
         stock:num(data.stock), minStock:num(data.minStock), notes:data.notes.trim() });
       toast("Producto actualizado");
     } else {
       S.products.push({ id:uid(), name:data.name.trim(), category:data.category.trim(), sku:data.sku.trim(),
-        cost:num(data.cost), extra:num(data.extra), price:num(data.price),
+        cost:num(data.cost), shipIn:num(data.shipIn), shipOut:num(data.shipOut), price:num(data.price),
         stock:num(data.stock), minStock:num(data.minStock), notes:data.notes.trim(), createdAt:todayISO() });
       toast("Producto añadido");
     }
@@ -600,10 +603,10 @@ function exportJSON(){
 }
 function exportCSV(){
   if(!S.products.length){ toast("No hay productos"); return; }
-  const head=["Producto","Categoria","SKU","Coste","Gastos extra","Coste real","Precio","Margen ud","Margen %","Stock","Vendidas","Ingresos","Beneficio"];
+  const head=["Producto","Categoria","SKU","Coste producto","Envio almacen","Envio final","Coste real","Precio","Margen ud","Margen %","Stock","Vendidas","Ingresos","Beneficio"];
   const lines=[head.join(";")];
   S.products.forEach(p=>{ const st=productStats(p);
-    lines.push([p.name,p.category||"",p.sku||"",num(p.cost),num(p.extra),effCost(p),num(p.price),
+    lines.push([p.name,p.category||"",p.sku||"",num(p.cost),num(p.shipIn),num(p.shipOut),effCost(p),num(p.price),
       unitMargin(p),(unitMarginPct(p)*100).toFixed(1),num(p.stock),st.unitsSold,st.revenue.toFixed(2),st.profit.toFixed(2)]
       .map(v=>`"${String(v).replace(/"/g,'""')}"`).join(";")); });
   downloadBlob(new Blob(["﻿"+lines.join("\n")],{type:"text/csv;charset=utf-8"}), `inventario-${todayISO()}.csv`);
@@ -624,10 +627,10 @@ fileInput.onchange=e=>{ const f=e.target.files[0]; if(!f) return; const r=new Fi
 
 /* ================== DATOS DE EJEMPLO ================== */
 function loadDemo(){
-  const p1={id:uid(),name:"Vela aromática lavanda",category:"Hogar",sku:"VL-01",cost:3.5,extra:0.6,price:12,stock:18,minStock:5,notes:"",createdAt:todayISO()};
-  const p2={id:uid(),name:"Taza cerámica",category:"Hogar",sku:"TZ-02",cost:2.2,extra:0.4,price:9.9,stock:4,minStock:6,notes:"",createdAt:todayISO()};
-  const p3={id:uid(),name:"Pulsera artesanal",category:"Bisutería",sku:"PB-03",cost:1.1,extra:0.2,price:6.5,stock:30,minStock:8,notes:"",createdAt:todayISO()};
-  const p4={id:uid(),name:"Jabón natural (pack)",category:"Cosmética",sku:"JB-04",cost:5,extra:0.8,price:5.5,stock:12,minStock:4,notes:"margen muy justo",createdAt:todayISO()};
+  const p1={id:uid(),name:"Vela aromática lavanda",category:"Hogar",sku:"VL-01",cost:3.5,shipIn:0.4,shipOut:0.2,price:12,stock:18,minStock:5,notes:"",createdAt:todayISO()};
+  const p2={id:uid(),name:"Taza cerámica",category:"Hogar",sku:"TZ-02",cost:2.2,shipIn:0.3,shipOut:0.1,price:9.9,stock:4,minStock:6,notes:"",createdAt:todayISO()};
+  const p3={id:uid(),name:"Pulsera artesanal",category:"Bisutería",sku:"PB-03",cost:1.1,shipIn:0.1,shipOut:0.1,price:6.5,stock:30,minStock:8,notes:"",createdAt:todayISO()};
+  const p4={id:uid(),name:"Jabón natural (pack)",category:"Cosmética",sku:"JB-04",cost:5,shipIn:0.5,shipOut:0.3,price:5.5,stock:12,minStock:4,notes:"margen muy justo",createdAt:todayISO()};
   S.products=[p1,p2,p3,p4]; S.movements=[];
   const mk=(prod,type,qty,val,daysAgo,cb)=>{ const d=new Date(); d.setDate(d.getDate()-daysAgo);
     return {id:uid(),ts:Date.now()+Math.random(),productId:prod.id,type,qty,unitValue:val,costBasis:cb,date:d.toISOString().slice(0,10),note:""}; };
