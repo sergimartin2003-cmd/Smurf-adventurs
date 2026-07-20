@@ -41,21 +41,26 @@ El análisis clave: separa tus productos en **los que más rentan**, **los que n
 
 ---
 
-## ☁️ Verlo desde varios sitios (sincronización en la nube)
+## ☁️ Datos compartidos en la nube (sin login)
 
-Si quieres que **los mismos datos aparezcan en todos tus dispositivos** (añades algo en el móvil y lo ves en el ordenador, y al revés), activa el modo nube. Es gratis, usa **Supabase** y se configura una sola vez.
+Los datos se guardan en una base de datos **Supabase** compartida por todo el proyecto. La conexión va **incrustada en la app**: no hay que iniciar sesión ni pegar ninguna clave. Abres la app, los datos ya aparecen, añades cosas y **se guardan solos**. Quien abra la app (en cualquier dispositivo) ve y edita los mismos datos.
 
-Pulsa el botón **☁️** (arriba a la derecha) y sigue la guía que aparece dentro del programa. En resumen:
+**Configuración (una sola vez, ya hecha):** en el **SQL Editor** de Supabase se creó la tabla compartida con este código:
 
-1. Crea una cuenta gratis en **supabase.com** y un **New project** (guarda la contraseña de la base de datos).
-2. En **SQL Editor**, pega el código que te muestra el programa (botón «Copiar código») y pulsa **Run**. Crea la tabla donde se guardan tus datos, protegida para que solo tú puedas verlos.
-3. En **Project Settings → API**, copia el **Project URL** y la clave **anon public**, y pégalos en el programa.
-4. Recomendado: en **Authentication → Sign In / Providers → Email**, desactiva **Confirm email** (así entras sin tener que confirmar el correo).
-5. Crea tu cuenta con email y contraseña dentro del programa. ¡Listo!
+```sql
+create table if not exists inventario_datos (
+  id text primary key,
+  data jsonb not null default '{}'::jsonb,
+  updated_at timestamptz not null default now()
+);
+grant all on table inventario_datos to anon;
+```
 
-A partir de ahí, cada cambio se guarda en la nube automáticamente. Para usarlo en otro dispositivo, abre la misma web, conecta el mismo proyecto y entra con tu email. El botón **☁️** muestra el estado: *Local*, *Sincronizado ✓*, *Guardando…* o *Sin conexión*. Si te quedas sin internet, se guarda en local y se sube cuando vuelves a tener conexión.
+El botón **☁️** (arriba a la derecha) solo **muestra el estado**: *Guardando…*, *Guardado ✓* o *Sin conexión*. Si lo pulsas, refresca los datos desde la nube (por si alguien más añadió algo). No hay que sincronizar nada a mano; la app también trae los cambios de otros cada pocos segundos.
 
-> 🔒 **Privacidad:** tus datos solo son visibles para tu cuenta (con contraseña). El código SQL activa la seguridad por filas (RLS) de Supabase para que nadie más pueda leerlos.
+Si te quedas sin internet, la app sigue funcionando en local y sube los cambios cuando vuelve la conexión.
+
+> ⚠️ **Nota:** al no haber login, cualquiera que tenga la app puede ver/editar estos datos. Como es una herramienta interna del proyecto (la app no se reparte a desconocidos), es un intercambio razonable de comodidad por seguridad. La clave incluida es la **anon** (pública), no la secreta.
 
 ---
 
